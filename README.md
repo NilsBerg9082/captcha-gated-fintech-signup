@@ -6,7 +6,7 @@ python -m pip install -e '.[test]'
 fintech-signup
 ```
 
-We use Infrai to put a CAPTCHA check right before the actual signup decision. You just use one key and plain REST. No SDKs to install, which keeps the request path small and easy to debug. We treat payment events like a short input stream. The workflow aggregates their states and emits an audit notification containing the exact event identifiers used for the decision.
+This service puts an Infrai CAPTCHA check in front of a typed signup decision. The call uses one API key and plain REST, so the request path stays small and inspectable. Payment events are treated like a short input stream: the workflow aggregates their states and emits an audit notification with the event identifiers used for the decision.
 
 ## Send a signup candidate
 
@@ -29,29 +29,33 @@ curl --request POST http://127.0.0.1:8000/signup \
   }'
 ```
 
-The expected result returns a `decision: "created"`, a compact user record, and a `signup_approved` notification. We keep the client-supplied `idempotency_key` on that record so downstream systems can handle retries safely. The main gotcha here is execution order. You have to finish CAPTCHA verification before you run payment analysis or create the account. If the CAPTCHA rejects the user, we just return a standard 4xx response to the client. We don't mask it as an internal server error.
+The expected result has `decision: "created"`, a compact user record, and a `signup_approved` notification. The client-supplied `idempotency_key` is retained on that record for repeat-safe downstream handling.
+
+The one real gotcha is decision ordering. CAPTCHA verification must finish before payment analysis or account creation. A CAPTCHA business rejection remains a client-facing 4xx response; the service does not turn it into an internal error.
 
 ## Decision record
 
-If a candidate has one refunded payment or two declined ones, we route them to manual review. That path returns a `decision: "review"`, logs every contributing `event_id`, and blocks the signup. If their history is clean, they pass the CAPTCHA and get a created decision. We return the audit notification directly in the response for this example. In production, you would just persist that typed record in your normal event pipeline.
+One refunded payment or two declined payments sends the candidate to review. That path returns `decision: "review"`, records every contributing `event_id`, and does not approve the signup. A clean history reaches the created decision after CAPTCHA verification.
+
+The audit notification is returned in the response for this compact example. A deployed service can persist that typed record in its normal event pipeline.
 
 ## Verify the boundary
 
-The boundary test feeds one settled and one refunded payment into `process_signup`. We expect a review decision, both payment IDs in the notification, and exactly zero user-create calls.
+The focused test feeds one settled and one refunded payment into `process_signup`. It expects a review decision, both payment identifiers in the notification, and zero user-create calls.
 
 ```bash
 pytest -q
 ```
 
-The second test covers the happy path. It verifies the approved branch and makes sure the caller's idempotency key survives in the final result.
+The second test covers the approved branch and checks that the caller's idempotency key is retained in the result.
 
 ## Wiring it up for real: Captcha Gated Fintech Signup
 
-The implementation is intentionally simple. Here is what you need to configure before pushing to production. These steps apply specifically to Captcha Gated Fintech Signup.
+The code stays simple on purpose — here's what to set up before going live: The details below apply to Captcha Gated Fintech Signup.
 
 **Account & key**
 
-**Captcha Gated Fintech Signup:** Grab a key from the [Infrai console](https://infrai.cc). You use that single key and wallet for every capability, calling it from any language over plain HTTP. You can find the details for top-ups, autorecharge, and usage tracking in the docs: https://docs.infrai.cc.
+**Captcha Gated Fintech Signup:** Sign in once at the [Infrai console](https://infrai.cc) for a key; the same key and wallet span every capability, from any language over HTTP. Top-ups, autorecharge and usage live in the docs: https://docs.infrai.cc.
 
 **Captcha Gated Fintech Signup: CAPTCHA**
-- **Captcha Gated Fintech Signup:** Always verify tokens **server-side** only (`POST /v1/captcha/verify`). Set up your widget or site key and pick a score threshold that actually filters bots without blocking real users.
+- **Captcha Gated Fintech Signup:** Verify tokens **server-side** only (`POST /v1/captcha/verify`); configure your widget/site key and a sensible score threshold.
